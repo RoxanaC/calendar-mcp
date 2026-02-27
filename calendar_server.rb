@@ -3,7 +3,7 @@ require "mcp"
 server = MCP::Server.new(name: "mac-calendar", version: "1.0.0")
 
 def run_applescript(script)
-  `osascript << 'APPLESCRIPT'
+  'osascript' << 'APPLESCRIPT'
 #{script}
 APPLESCRIPT`.strip
 end
