@@ -1,11 +1,14 @@
 require "mcp"
+require "json"
+require "shellwords"
 
 server = MCP::Server.new(name: "mac-calendar", version: "1.0.0")
 
-def run_applescript(script)
-  'osascript' << 'APPLESCRIPT'
-#{script}
-APPLESCRIPT`.strip
+HELPER_PATH = File.join(__dir__, "calendar_helper")
+
+def run_swift_helper(subcommand, params = {})
+  json = JSON.generate(params)
+  `#{Shellwords.escape(HELPER_PATH)} #{subcommand} #{Shellwords.escape(json)} 2>/dev/null`.strip
 end
 
 server.define_tool(
@@ -19,26 +22,11 @@ server.define_tool(
     }
   }
 ) do |args|
-  days     = args["days"] || 7
-  cal_filter = args["calendar"] ? "whose name is \"#{args["calendar"]}\"" : ""
-  script = <<~AS
-    set eventList to {}
-    set startDate to current date
-    set endDate to startDate + (#{days} * days)
-    tell application "Calendar"
-      repeat with cal in (every calendar #{cal_filter})
-        set calEvents to every event of cal whose start date >= startDate and start date <= endDate
-        repeat with ev in calEvents
-          set evStart to start date of ev as string
-          set evEnd to end date of ev as string
-          set end of eventList to (evStart & " | " & evEnd & " | " & summary of ev & " [" & name of cal & "]")
-        end repeat
-      end repeat
-    end tell
-    return eventList
-  AS
-  result = run_applescript(script)
-  result.empty? ? "No upcoming events found." : result
+  result = run_swift_helper("get_upcoming_events", {
+    days:     args[:days] || 7,
+    calendar: args[:calendar]
+  }.compact)
+  MCP::Tool::Response.new([{ type: "text", text: result.empty? ? "No upcoming events found." : result }])
 end
 
 server.define_tool(
@@ -53,25 +41,12 @@ server.define_tool(
     required: ["query"]
   }
 ) do |args|
-  query = args["query"]
-  days  = args["days"] || 30
-  script = <<~AS
-    set eventList to {}
-    set startDate to (current date) - (#{days} * days)
-    set endDate to (current date) + (#{days} * days)
-    tell application "Calendar"
-      repeat with cal in every calendar
-        set calEvents to every event of cal whose start date >= startDate and start date <= endDate and summary contains "#{query}"
-        repeat with ev in calEvents
-          set evStart to start date of ev as string
-          set end of eventList to (evStart & " | " & summary of ev & " [" & name of cal & "]")
-        end repeat
-      end repeat
-    end tell
-    return eventList
-  AS
-  result = run_applescript(script)
-  result.empty? ? "No events found matching '#{query}'." : result
+  query = args[:query]
+  result = run_swift_helper("search_events", {
+    query: query,
+    days:  args[:days] || 30
+  })
+  MCP::Tool::Response.new([{ type: "text", text: result.empty? ? "No events found matching '#{query}'." : result }])
 end
 
 server.define_tool(
@@ -89,23 +64,14 @@ server.define_tool(
     required: ["title", "start", "end_time"]
   }
 ) do |args|
-  title    = args["title"]
-  start    = args["start"]
-  end_time = args["end_time"]
-  cal_line   = args["calendar"] ? "set targetCal to first calendar whose name is \"#{args["calendar"]}\"" : "set targetCal to first calendar"
-  notes_line = args["notes"]    ? "set description of newEvent to \"#{args["notes"]}\"" : ""
-  script = <<~AS
-    tell application "Calendar"
-      #{cal_line}
-      set startDate to date "#{start}"
-      set endDate to date "#{end_time}"
-      set newEvent to make new event at end of events of targetCal with properties {summary:"#{title}", start date:startDate, end date:endDate}
-      #{notes_line}
-      save
-    end tell
-    return "Event '#{title}' created successfully."
-  AS
-  run_applescript(script)
+  result = run_swift_helper("create_event", {
+    title:    args[:title],
+    start:    args[:start],
+    end_time: args[:end_time],
+    calendar: args[:calendar],
+    notes:    args[:notes]
+  }.compact)
+  MCP::Tool::Response.new([{ type: "text", text: result }])
 end
 
 server.define_tool(
@@ -120,24 +86,11 @@ server.define_tool(
     required: ["title", "date"]
   }
 ) do |args|
-  title = args["title"]
-  date  = args["date"]
-  script = <<~AS
-    tell application "Calendar"
-      set targetDate to date "#{date}"
-      set startOfDay to targetDate
-      set endOfDay to targetDate + 1 * days
-      repeat with cal in every calendar
-        set matches to every event of cal whose summary is "#{title}" and start date >= startOfDay and start date < endOfDay
-        repeat with ev in matches
-          delete ev
-        end repeat
-      end repeat
-      save
-    end tell
-    return "Event '#{title}' deleted."
-  AS
-  run_applescript(script)
+  result = run_swift_helper("delete_event", {
+    title: args[:title],
+    date:  args[:date]
+  })
+  MCP::Tool::Response.new([{ type: "text", text: result }])
 end
 
 transport = MCP::Server::Transports::StdioTransport.new(server)
